@@ -17,46 +17,59 @@ from torch.utils.data import DataLoader, Dataset
 import os
 from PIL import Image
 import csv
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-epoch_data = []
-csv_filename = "epoch_losses.csv"  # CSV file to store summary
+def initialize_csv(csv_filename):
+    if not os.path.exists(csv_filename):
+        print(f"Creating CSV file: {csv_filename}")
+        with open(csv_filename, "w", newline="") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=["epoch", "recon_error", "perplexity", "total_loss"])
+            writer.writeheader()
+        print(f"Headers written to {csv_filename}")
+    else:
+        print(f"CSV file {csv_filename} already exists.")
 
-# Create the CSV file and write headers initially
-if not os.path.exists(csv_filename):
-    with open(csv_filename, "w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["epoch", "recon_error", "perplexity", "total_loss"])
-        writer.writeheader()
+def prepare_data_loaders(image_size, batch_size, train_data_path, seed=42):
+    """
+    Prepares data loaders for training and validation with specified image transformations.
 
-image_size = 128
+    Parameters:
+        image_size (int): Size to which images will be resized (image_size x image_size).
+        batch_size (int): Batch size for the training data loader.
+        train_data_path (str): Path to the folder containing training images.
+        seed (int): Seed for reproducibility.
 
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
- 
-## Finds images
-train_data_path = 'cats'
- 
-### Rescaling incoming image to 28 by 28 pixels
-### After Rescaling, convert the image to a tensor
+    Returns:
+        tuple: A tuple containing (training_loader, validation_loader).
+    """
+    # Set random seeds for reproducibility
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
 
-print(">> transform >>")
-transform = transforms.Compose([transforms.Resize((image_size ,image_size)),transforms.ToTensor(),transforms.Normalize((0.5,0.5,0.5), (1.0,1.0,1.0))])
-print(">> train_data >>")
-train_data = torchvision.datasets.ImageFolder(root=train_data_path,transform=transform)
-print(">> test_data >>")
-test_data = torchvision.datasets.ImageFolder(root=train_data_path,transform=transform)
-print(">> training_loader >>")
+    # Define image transformations: resize, tensor conversion, and normalization
+    print(">> Setting up transformations >>")
+    transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (1.0, 1.0, 1.0))
+    ])
 
+    # Load training and validation datasets
+    print(">> Loading training data >>")
+    train_data = torchvision.datasets.ImageFolder(root=train_data_path, transform=transform)
+    
+    print(">> Loading validation data >>")
+    validation_data = torchvision.datasets.ImageFolder(root=train_data_path, transform=transform)
 
+    # Create data loaders
+    print(">> Setting up training and validation loaders >>")
+    training_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    validation_loader = torch.utils.data.DataLoader(validation_data, batch_size=32, shuffle=True)
 
-batch_size = 1080
+    print(">> Data loaders are ready >>")
+    return training_loader, validation_loader
 
-
-
-training_loader = torch.utils.data.DataLoader(train_data,batch_size,shuffle=True)
-print(">> validation_loader >>")
-validation_loader = torch.utils.data.DataLoader(train_data,32,shuffle=True)
-##### Declare the model architecture
 
 class VectorQuantizer(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, commitment_cost):
@@ -215,34 +228,21 @@ class Model(nn.Module):
         x_recon = self._decoder(quantized)
         return loss,x_recon,perplexity
 
-
-if __name__ == "__main__":
-
-    num_training_updates = 50000
-    num_hiddens = 128
-    num_residual_hiddens = 32
-    num_residual_layers = 2
-    embedding_dim= 512
-    num_embeddings = 512
-    commitment_cost = 0.25
-    learning_rate = 1e-3
+def train_model(training_loader, num_hiddens,num_residual_layers,num_residual_hiddens,num_embeddings,embedding_dim,commitment_cost,decay=0):
 
     print(">"*90)
-    
     model = Model(num_hiddens,num_residual_layers,num_residual_hiddens,num_embeddings,embedding_dim,commitment_cost,decay=0).to(device)
-    
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, amsgrad=False)
 
     print("-"*90)
-    
     model.train()
-
     print("+"*90)
     
     train_res_recon_error = []
     train_res_perplexity = []
     
     losses = []
+    epoch_data = []
     
     for i in xrange(num_training_updates):
         # print("*"*90)
@@ -285,8 +285,6 @@ if __name__ == "__main__":
                 ])
 
             print(f"Data saved up to epoch {i + 1}")
-
-        
             print('%d iterations' % (i+1))
             print('recon_error: %.3f' % np.mean(train_res_recon_error[-100:]))
             print('perplexity: %.3f' % np.mean(train_res_perplexity[-100:]))
@@ -297,31 +295,26 @@ if __name__ == "__main__":
             
     torch.save(model.state_dict(), 'vae_cat_trained_model_50k/Advance_model.pth')
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(train_res_recon_error, label='Reconstruction Error', color='blue')
-    plt.xlabel('Iterations')
-    plt.ylabel('Reconstruction Error')
-    plt.legend()
-    plt.title('VAE Training: Reconstruction Error')
-    
-    # Save the figure
-    plt.savefig('vae_reconstruction_error.png')
-    
-    # Optionally, you can close the plot to free up memory
-    plt.close()
+if __name__ == "__main__":
 
-    
+    num_training_updates = 50000
+    num_hiddens = 128
+    num_residual_hiddens = 32
+    num_residual_layers = 2
+    embedding_dim= 512
+    num_embeddings = 512
+    commitment_cost = 0.25
+    learning_rate = 1e-3
 
-    # Plotting the perplexity graph
-    plt.figure(figsize=(10, 5))
-    plt.plot(train_res_perplexity, label='Perplexity', color='green')
-    plt.xlabel('Iterations')
-    plt.ylabel('Perplexity')
-    plt.legend()
-    plt.title('VAE Training: Perplexity')
+    csv_filename = "epoch_losses_3.csv"  # CSV file to store summary
+    initialize_csv(csv_filename)
+
+    # Parameters
+    image_size = 128
+    batch_size = 1080
+    train_data_path = 'cats'
     
-    # Save the figure
-    plt.savefig('Perplexity.png')
-    
-    # Optionally, you can close the plot to free up memory
-    plt.close()
+    # Call the function
+    training_loader, validation_loader = prepare_data_loaders(image_size, batch_size, train_data_path)
+
+    train_model(training_loader, num_hiddens,num_residual_layers,num_residual_hiddens,num_embeddings,embedding_dim,commitment_cost,decay=0)
